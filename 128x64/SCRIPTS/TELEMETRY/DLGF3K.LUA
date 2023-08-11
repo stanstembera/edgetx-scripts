@@ -72,7 +72,7 @@ local value = {
 	alt = {
 		launch	= 0,			-- top of launch
 		max,					-- maximum altitude during flight
-		nowAlt 					-- current altitude
+		current 				-- current altitude
 	},
 	lnchnr = 0,					-- launch counter
 	swSR,						-- start / reset switch value from Tx (<0 is UP for launch mode)
@@ -104,22 +104,28 @@ local writeLog = function()
 	local leadZero = function(number) return string.format("%02d", number) end
 	local takeOff = value.time.takeOff
 	local landing = value.time.landing
-
   	local fileName = "/LOGS/"..model.getInfo().name.."-LogBook-"..takeOff.year.."-"..takeOff.mon.."-"..takeOff.day..".csv"
-  	local file = io.open(fileName, "a")
+  	local file = io.open(fileName, "r")
+	local newFile = true
+
+	if file ~= nil then
+		newFile = false
+		io.close(file)
+	end
+	
+	file = io.open(fileName, "a") 
   
-	if file == nil then io.write(file, "Date,TakeOff,Land,FlightNo,LaunchAltitude,MaxAltitude,Duration,AltGraph\r\n") end
-
-  	local date = takeOff.year.."-"..leadZero(takeOff.mon).."-"..leadZero(takeOff.day)
-  	local takeOff = leadZero(takeOff.hour)..":"..leadZero(takeOff.min)..":"..leadZero(takeOff.sec)
-  	local land = leadZero(landing.hour)..":"..leadZero(landing.min)..":"..leadZero(landing.sec)
-  	local flightNumber = value.lnchnr
-  	local launchAltitude = decimalZero(value.alt.launch)
-  	local maxAltitude = decimalZero(value.alt.max)
-  	local duration = decimalZero(value.time.duration)
-  	local altGraph = ""
-
-  	for k,v in pairs(display.alts) do altGraph = altGraph..round(v,2).."_" end
+	if newFile then io.write(file, "Date,TakeOff,Land,FlightNo,LaunchAltitude,MaxAltitude,Duration,AltGraph\r\n") end
+	
+	local date = takeOff.year.."-"..leadZero(takeOff.mon).."-"..leadZero(takeOff.day)
+	local takeOff = leadZero(takeOff.hour)..":"..leadZero(takeOff.min)..":"..leadZero(takeOff.sec)
+	local land = leadZero(landing.hour)..":"..leadZero(landing.min)..":"..leadZero(landing.sec)
+	local flightNumber = value.lnchnr
+	local launchAltitude = decimalZero(value.alt.launch)
+	local maxAltitude = decimalZero(value.alt.max)
+	local duration = decimalZero(value.time.duration)
+	local altGraph = ""
+	for k,v in pairs(display.alts) do altGraph = altGraph..round(v,2).."_" end
 	
 	io.write(file, date..","..takeOff..","..land..","..flightNumber..","..launchAltitude..","..maxAltitude..","..duration..","..altGraph.."\r\n")
   	io.close(file)
