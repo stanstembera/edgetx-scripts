@@ -28,10 +28,11 @@ rev 2.3 11/21/2021
 --	  variables for user to adjust
 --  ================================
 local settings = {
-	yMaxInit = 40,	-- initial max altitude on graph (m)
-	xMaxInit = 30,	-- initial max time on graph (seconds)
+	yMaxInit = 40,		-- initial max altitude on graph (m)
+	xMaxInit = 30,		-- initial max time on graph (seconds)
 	tresholdAlt = 2,	-- altitude threshold for starting and stopping the flight (m)
-	saveLog = true	-- true = to write LOGs, false disable
+	saveLog = true,		-- true = to write LOGs, false disable
+	audioState = false	-- true = beep when state changes 
 }
 
 --  ================================
@@ -131,33 +132,39 @@ local writeLog = function()
   	io.close(file)
 end
 
+local beep = function(length)
+	if settings.audioState then
+		playTone(1500, length, 0, PLAY_NOW)
+	end
+end
+
 --  ==============
 --	  initialize
 --  ==============
-local function init()			-- intialize values
+local function init()					-- intialize values
 	for i = 1, display.gWidth do
 		display.alts[i] = -10			-- set altitude array values to be below the visible graph range
 	end
-	display.xMax = settings.xMaxInit				-- set X-axis max value (sec)
+	display.xMax = settings.xMaxInit	-- set X-axis max value (sec)
 	display.xSpeed = display.gWidth/display.xMax		-- set X-axis speed (pixels/second)
 	display.xScale = 5					-- set X-axis marker interval (s)
-	display.yMax = settings.yMaxInit				-- set Y-axis max value (m)
+	display.yMax = settings.yMaxInit	-- set Y-axis max value (m)
 	display.yScale = 10					-- set Y-axis marker interval (sec)
 	display.index = 1					-- set initial array position
-	value.alt.launch = 0					-- reset flight launch altitude
+	value.alt.launch = 0				-- reset flight launch altitude
 	value.alt.max = 0					-- reset flight max altitude
-	value.time.duration = 0					-- reset flight duration
+	value.time.duration = 0				-- reset flight duration
 	
-  	resetBaro()					-- reset barometric sensor
+  	resetBaro()							-- reset barometric sensor
 end
 
 --  =======
 --	  run
 --  =======
 local function run(event)				-- this function will run until it is stopped
-	lcd.clear()						-- clear the display
+	lcd.clear()							-- clear the display
 	
-	value.swSR = getValue(field.launchSwitchId)				-- (disabled) get value of switch E (Tx launch mode)
+	value.swSR = getValue(field.launchSwitchId)			-- (disabled) get value of switch E (Tx launch mode)
 	value.alt.current = getValue(field.altId)			-- get current altitude from vario (m)
 	value.rxBt = getValue(field.rxBtId);
 
@@ -165,7 +172,8 @@ local function run(event)				-- this function will run until it is stopped
 --	  change program if needed
 --  ----------------------------------
 	if value.state == 0 and value.swSR > 0 then					-- if SE was moved to launch mode from "init/stop" state
-		init()							-- reset graph data & scale
+		init()								-- reset graph data & scale
+		beep(250)							
 		value.state = 1						-- change state to "ready"
 		elseif value.state == 1 and value.swSR < 0 then				-- if launch mode is ended without a flight
 			value.state = 0						-- change state to "stop"
@@ -176,11 +184,13 @@ local function run(event)				-- this function will run until it is stopped
 			display.index = 2						-- set index for 2nd alt point
 			value.state = 2						-- change state to "launch climb"
 			value.lnchnr = value.lnchnr + 1					-- increment the launch number
-		elseif value.state == 2 and value.alt.current < value.alt.max then			-- if in "launch climb" and altitude decreases
+		elseif value.state == 2 and value.alt.current < value.alt.max and value.alt.current > 2*settings.tresholdAlt then			-- if in "launch climb" and altitude decreases
 			value.alt.launch = value.alt.max					-- set launch altitude
 			value.state = 3						-- set state = "gliding"
-		elseif value.state > 1 and value.alt.current < settings.tresholdAlt then			-- if "in flight" and altitude drops below X
+			beep(1000)
+		elseif value.state > 1 and value.alt.current < settings.tresholdAlt - 1 then			-- if "in flight" and altitude drops below X
 			value.state = 0						-- change state to "stop"
+			beep(500)
 			if settings.saveLog then
 				value.time.landing = getDateTime()
 				writeLog() -- landing, write to SD
