@@ -42,11 +42,16 @@ local hardware = {
 	launchSwitch = "sc",	-- alter to your specific needs (SA, SB, SC, SD ....), depends on your Tx hardware
 }
 
+local function safeGetFieldId(name)
+	local info = getFieldInfo(name)
+	return info and info.id or 0
+end
+
 local field = {
-	altId = getFieldInfo("Alt").id,
-	vspdId = getFieldInfo("VSpd").id,
-	rxBtId = getFieldInfo("RxBt").id,
-	launchSwitchId = getFieldInfo(hardware.launchSwitch).id
+	altId = safeGetFieldId("Alt"),
+	vspdId = safeGetFieldId("VSpd"),
+	rxBtId = safeGetFieldId("RxBt"),
+	launchSwitchId = safeGetFieldId(hardware.launchSwitch)
 }
 
 local display = {
@@ -84,7 +89,7 @@ local value = {
 	state = 0					-- program state : 0=init/stop, 1=ready, 2=launch climb, 3=gliding
 }
 
-logBook = {}					-- share flight results with logbook script
+logBook = {}				-- share flight results with logbook script (global for RESULT.LUA)
 
 local round = function(number, decimals)
   local mult = 10^(decimals or 0)
@@ -103,14 +108,14 @@ local resetBaro = function()
   for i = 0, 31 do
     local name = getSensorName(i)
 
-    if name == "alt" then
+    if string.lower(name) == "alt" then
       model.resetSensor(i)
       break
     end
   end
 end
 
-quickSort = function(array, le, ri)
+local quickSort = function(array, le, ri)
     if ri-le < 1 then 
         return array
     end
@@ -131,8 +136,8 @@ quickSort = function(array, le, ri)
 
     array[left], array[right] = array[right], array[left]
 
-    quickSort(array, 1, left-1)
-    quickSort(array, left +1, ri)
+    quickSort(array, le, left-1)
+    quickSort(array, left+1, ri)
 
     return array
 end
@@ -162,8 +167,9 @@ local writeLog = function()
 	local maxAltitude = decimalZero(value.alt.max)
 	local duration = decimalZero(value.time.duration)
 	local lap = decimalZero(value.time.lap)
-	local altGraph = ""
-	for k,v in pairs(display.alts) do altGraph = altGraph..round(v,2).."_" end
+	local altParts = {}
+	for i = 1, #display.alts do altParts[i] = round(display.alts[i], 2) end
+	local altGraph = table.concat(altParts, "_")
 	
 	io.write(file, date..","..takeOff..","..land..","..flightNumber..","..launchAltitude..","..maxAltitude..","..duration..","..lap..","..altGraph.."\r\n")
   	io.close(file)
@@ -207,6 +213,10 @@ local displayValues = function()
 	lcd.drawText(112, 52, decimalZero(value.rxBt), rxBtBlink)	-- get voltage from the Tx
   	lcd.drawText(15, 57, decimalZero(value.time.duration).."s", SMLSIZE)
 	lcd.drawText(15, 18, decimalZero(value.time.lap).."s", MIDSIZE)
+
+	if value.state == 0 then
+		lcd.drawText(39, 57, "[ENT long] setup", SMLSIZE)
+	end
 end
 
 local rescaleX = function()
@@ -238,7 +248,7 @@ end
 
 local rescaleY = function()
 	if value.state > 1 and value.alt.current > display.yMax then	--  if "in flight" and altitude reaches top of graph
-		display.yMax = display.yMax+10							-- add 5 m to top of graph
+		display.yMax = display.yMax+10							-- add 10 m to top of graph
 
 		-- check the scale marker count, and adjust if needed
 		display.yScale = 10						-- start with marker interval = 10 m
@@ -259,16 +269,18 @@ end
 
 local drawGraph = function()
 	for i = 1, display.gWidth do
-		y = 64*(display.alts[i]-display.yMax)/(0-display.yMax)						-- calculate Y coordinate for graph point
-		if y < 63 then								-- don't draw if below graph, because grey point overwrites bottom line.
-			lcd.drawLine(display.gLeft+i, y, display.gLeft+i, 62, SOLID, 0)	--  draw grey line down from altitude
+		if display.alts[i] > -10 then
+			local y = 64*(display.alts[i]-display.yMax)/(0-display.yMax)					-- calculate Y coordinate for graph point
+			if y < 63 then								-- don't draw if below graph, because grey point overwrites bottom line.
+				lcd.drawLine(display.gLeft+i, y, display.gLeft+i, 62, SOLID, 0)	--  draw grey line down from altitude
+			end
 		end
 	end
 end
 
 local drawStaticElements = function()
 	for i = display.yScale, display.yMax, display.yScale do						-- create Y-axis scale
-		y = 64*(i-display.yMax)/(0-display.yMax)					-- calculate y coordinates
+		local y = 64*(i-display.yMax)/(0-display.yMax)				-- calculate y coordinates
 		if y-3 > 2 then							-- if number will fit on screen
 			lcd.drawNumber(0, y-3, i, SMLSIZE)			-- draw graph scale number
 		end
@@ -277,6 +289,75 @@ local drawStaticElements = function()
 		end
 	end
 end
+
+--  ================================
+--	  switch detection & config
+--  ================================
+local switches = {}
+for _, name in ipairs({"sa","sb","sc","sd","se","sf","sg","sh"}) do
+	local info = getFieldInfo(name)
+	if info then
+		switches[#switches+1] = { name = name, id = info.id }
+	end
+end
+
+local setupMode = false
+local switchIndex = 1
+local CONFIG_PATH = "/SCRIPTS/TELEMETRY/DLGF3K.cfg"
+
+local function findSwitchIndex(name)
+	for i, sw in ipairs(switches) do
+		if sw.name == name then return i end
+	end
+	return nil
+end
+
+local function loadConfig()
+	local file = io.open(CONFIG_PATH, "r")
+	if file then
+		local name = io.read(file, 64)
+		io.close(file)
+		if name then
+			name = string.gsub(name, "%s+", "")
+			local idx = findSwitchIndex(name)
+			if idx then
+				switchIndex = idx
+				hardware.launchSwitch = name
+				field.launchSwitchId = safeGetFieldId(name)
+				return
+			end
+		end
+	end
+	local idx = findSwitchIndex(hardware.launchSwitch)
+	if idx then
+		switchIndex = idx
+	elseif #switches > 0 then
+		switchIndex = 1
+		hardware.launchSwitch = switches[1].name
+		field.launchSwitchId = switches[1].id
+	end
+end
+
+local function saveConfig()
+	local file = io.open(CONFIG_PATH, "w")
+	if file then
+		io.write(file, hardware.launchSwitch)
+		io.close(file)
+	end
+end
+
+local function drawSetup()
+	lcd.clear()
+	lcd.drawText(20, 0, "SW SETUP", DBLSIZE)
+	lcd.drawText(4, 24, "Launch switch:", 0)
+	local name = string.upper(switches[switchIndex].name)
+	lcd.drawFilledRectangle(44, 36, 40, 20)
+	lcd.drawText(48, 38, name, DBLSIZE+INVERS)
+	lcd.drawText(4, 57, "[+/-] change", SMLSIZE)
+	lcd.drawText(76, 57, "[ENT] save", SMLSIZE)
+end
+
+loadConfig()
 
 --  ==============
 --	  initialize
@@ -302,6 +383,37 @@ end
 --	  run
 --  =======
 local function run(event)				-- this function will run until it is stopped
+
+	-- setup mode handling
+	if setupMode then
+		if event == EVT_VIRTUAL_INC or event == EVT_VIRTUAL_INC_REPT
+				or event == EVT_PLUS_BREAK or event == EVT_PLUS_REPT then
+			switchIndex = switchIndex < #switches and switchIndex + 1 or 1
+		elseif event == EVT_VIRTUAL_DEC or event == EVT_VIRTUAL_DEC_REPT
+				or event == EVT_MINUS_BREAK or event == EVT_MINUS_REPT then
+			switchIndex = switchIndex > 1 and switchIndex - 1 or #switches
+		elseif event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK then
+			hardware.launchSwitch = switches[switchIndex].name
+			field.launchSwitchId = switches[switchIndex].id
+			saveConfig()
+			beep(200)
+			setupMode = false
+		elseif event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK then
+			switchIndex = findSwitchIndex(hardware.launchSwitch)
+			setupMode = false
+		end
+		drawSetup()
+		return 0
+	end
+
+	-- long-press ENTER to open setup (only in idle state)
+	if (event == EVT_VIRTUAL_ENTER_LONG or event == EVT_ENTER_LONG) and value.state == 0 then
+		setupMode = true
+		killEvents(EVT_ENTER_BREAK)
+		drawSetup()
+		return 0
+	end
+
 	lcd.clear()						-- clear the display
 	
 	value.swSR = getValue(field.launchSwitchId)				-- get value of launch switch (Tx launch mode)
