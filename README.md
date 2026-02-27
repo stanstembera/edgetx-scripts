@@ -48,7 +48,7 @@ Companion telemetry page that displays lap times of the last 5 recorded flights.
 
 ## Installation
 
-1. Copy the `128x64/SCRIPTS/TELEMETRY/` folder to your radio's SD card under the same path.
+1. Copy `DLGF3K.LUA` and `RESULT.LUA` from `128x64/SCRIPTS/TELEMETRY/` to `SCRIPTS/TELEMETRY/` on your radio's SD card.
 2. In EdgeTX, go to **Model Setup → Telemetry → Screens** and add `DLGF3K` as a telemetry screen.
 3. Optionally add `RESULT` as a second telemetry screen.
 4. Long-press **[ENT]** on the DLGF3K screen to configure the launch switch.
