@@ -115,7 +115,8 @@ local resetBaro = function()
   end
 end
 
-local quickSort = function(array, le, ri)
+local quickSort
+quickSort = function(array, le, ri)
     if ri-le < 1 then 
         return array
     end
@@ -167,9 +168,11 @@ local writeLog = function()
 	local maxAltitude = decimalZero(value.alt.max)
 	local duration = decimalZero(value.time.duration)
 	local lap = decimalZero(value.time.lap)
-	local altParts = {}
-	for i = 1, #display.alts do altParts[i] = round(display.alts[i], 2) end
-	local altGraph = table.concat(altParts, "_")
+	local altGraph = ""
+	for i = 1, #display.alts do
+		if i > 1 then altGraph = altGraph .. "_" end
+		altGraph = altGraph .. round(display.alts[i], 2)
+	end
 	
 	io.write(file, date..","..takeOff..","..land..","..flightNumber..","..launchAltitude..","..maxAltitude..","..duration..","..lap..","..altGraph.."\r\n")
   	io.close(file)
