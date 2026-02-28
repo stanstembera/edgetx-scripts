@@ -213,12 +213,12 @@ local displayValues = function()
 	lcd.drawText(15, 0, decimalZero(altitude).."m", MIDSIZE)
 	lcd.drawText(112, 18, "LnA", SMLSIZE)
 	lcd.drawText(112, 44, "RxB", SMLSIZE)
-	lcd.drawText(112, 52, decimalZero(value.rxBt), rxBtBlink)	-- get voltage from the Tx
+	lcd.drawText(110, 52, decimalZero(value.rxBt), rxBtBlink)	-- get voltage from the Tx
   	lcd.drawText(15, 57, decimalZero(value.time.duration).."s", SMLSIZE)
 	lcd.drawText(15, 18, decimalZero(value.time.lap).."s", MIDSIZE)
 
 	if value.state == 0 then
-		lcd.drawText(39, 57, "[ENT long] setup", SMLSIZE)
+		lcd.drawText(18, 38, "[ ENTER long ] setup", SMLSIZE+INVERS)
 	end
 end
 
