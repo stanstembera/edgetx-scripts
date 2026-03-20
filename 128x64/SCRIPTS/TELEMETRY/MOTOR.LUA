@@ -1,7 +1,7 @@
 --[[
 
   ============================
-  ===  D L G    T R A C E  ===
+  ===  M T R    T R A C E  ===
   ============================
 
 rev 2.1   06/15/2015
@@ -13,15 +13,18 @@ rev 2.2 10/09/2016
 rev 2.3 11/21/2021
   Stanley J. Stembera
 
-  LUA Script for OpenTX to graph altitude vs time with DLG launch.
+rev 3.0 08/01/2025
+  Stanley J. Stembera
+
+  LUA Script for OpenTX to graph altitude vs time for motor models.
   X-axis will automatically re-scale by +33% seconds if the max is reached.
-  Y-axis will automatically re-scale by +5 m if the max is reached.
+  Y-axis will automatically re-scale by +10 m if the max is reached.
 
   The graph code is leveraged from an openTX script.
   There are no other files required (such as BMP images) to run this script.
 
   128x64
- 
+
 --]]
 
 --  ================================
@@ -30,9 +33,8 @@ rev 2.3 11/21/2021
 local settings = {
 	yMaxInit = 40,		-- initial max altitude on graph (m)
 	xMaxInit = 30,		-- initial max time on graph (seconds)
-	tresholdAlt = 2,	-- altitude threshold for starting and stopping the flight (m)
 	saveLog = true,		-- true = to write LOGs, false disable
-	audioState = true	-- true = beep when state changes 
+	audioState = true	-- true = beep when state changes
 }
 
 --  ================================
@@ -47,10 +49,19 @@ local function safeGetFieldId(name)
 	return info and info.id or 0
 end
 
+local function sensorExists(name)
+	return getFieldInfo(name) ~= nil
+end
+
+local hasGps = sensorExists("GSpd")
+
 local field = {
 	altId = safeGetFieldId("Alt"),
 	vspdId = safeGetFieldId("VSpd"),
 	rxBtId = safeGetFieldId("RxBt"),
+	celsId = safeGetFieldId("Cels"),
+	gspdId = safeGetFieldId("GSpd"),
+	satsId = safeGetFieldId("Sats"),
 	launchSwitchId = safeGetFieldId(hardware.launchSwitch)
 }
 
@@ -71,25 +82,28 @@ local display = {
 local value = {
 	time = {
 		start = 0,				-- time at start of flight
-		hook = 0,				-- time at hook release
 		duration,				-- duration of each flight
-		lap,					-- lap time
 		current,				-- current time
 		takeOff,				-- take off date
 		landing					-- landing date
 	},
 	alt = {
-		launch	= 0,			-- top of launch
 		max,					-- maximum altitude during flight
 		current 				-- current altitude
 	},
 	lnchnr = 0,					-- launch counter
-	swSR,						-- start / reset switch value from Tx (<0 is UP for launch mode)
+	swSR,						-- start / reset switch value from Tx
 	rxBt,						-- Rx battery voltage value
-	state = 0					-- program state : 0=init/stop, 1=ready, 2=launch climb, 3=gliding
+	state = 0,					-- program state : 0=stop, 3=flying
+	resetDone = false,			-- flag to prevent repeated reset
+	cels,						-- Cells voltage
+	vSpd,
+	gSpd = 0,					-- current GPS speed (km/h)
+	gSpdMax = 0,				-- maximum GPS speed during flight (km/h)
+	sats = 0					-- number of GPS satellites
 }
 
-logBook = {}				-- share flight results with logbook script (global for RESULT.LUA)
+logBook = {}					-- share flight results with logbook script
 
 local round = function(number, decimals)
   local mult = 10^(decimals or 0)
@@ -117,7 +131,7 @@ end
 
 local quickSort
 quickSort = function(array, le, ri)
-    if ri-le < 1 then 
+    if ri-le < 1 then
         return array
     end
 
@@ -143,6 +157,20 @@ quickSort = function(array, le, ri)
     return array
 end
 
+local calculateCels = function(cels)
+	if cels == 0 then
+	    return 0
+	else
+		local celsV = 0
+
+		for i = 1, #cels do
+	    	celsV = celsV + cels[i]
+		end
+
+		return celsV
+	end
+end
+
 local writeLog = function()
 	local leadZero = function(number) return string.format("%02d", number) end
 	local takeOff = value.time.takeOff
@@ -155,26 +183,25 @@ local writeLog = function()
 		newFile = false
 		io.close(file)
 	end
-	
-	file = io.open(fileName, "a") 
-  
-	if newFile then io.write(file, "Date,TakeOff,Land,FlightNo,LaunchAltitude,MaxAltitude,Duration,Lap,AltGraph\r\n") end
-	
+
+	file = io.open(fileName, "a")
+
+	if newFile then io.write(file, "Date,TakeOff,Land,FlightNo,MaxAltitude,MaxSpeed,Duration,AltGraph\r\n") end
+
 	local date = takeOff.year.."-"..leadZero(takeOff.mon).."-"..leadZero(takeOff.day)
 	local takeOff = leadZero(takeOff.hour)..":"..leadZero(takeOff.min)..":"..leadZero(takeOff.sec)
 	local land = leadZero(landing.hour)..":"..leadZero(landing.min)..":"..leadZero(landing.sec)
 	local flightNumber = value.lnchnr
-	local launchAltitude = decimalZero(value.alt.launch)
 	local maxAltitude = decimalZero(value.alt.max)
+	local maxSpeed = decimalZero(value.gSpdMax)
 	local duration = decimalZero(value.time.duration)
-	local lap = decimalZero(value.time.lap)
 	local altGraph = ""
 	for i = 1, #display.alts do
 		if i > 1 then altGraph = altGraph .. "_" end
 		altGraph = altGraph .. round(display.alts[i], 2)
 	end
-	
-	io.write(file, date..","..takeOff..","..land..","..flightNumber..","..launchAltitude..","..maxAltitude..","..duration..","..lap..","..altGraph.."\r\n")
+
+	io.write(file, date..","..takeOff..","..land..","..flightNumber..","..maxAltitude..","..maxSpeed..","..duration..","..altGraph.."\r\n")
   	io.close(file)
 end
 
@@ -186,36 +213,41 @@ end
 
 local displayValues = function()
 	local altitude = value.alt.max
-	local xLaunch = 108
 	local rxBtBlink = MIDSIZE
-	
+
 	if value.state > 1 then														-- if in a flight state
 		value.time.duration = value.time.current - value.time.start				-- calculate the flight duration (sec)
-		if value.state == 3 then
-			value.time.lap = value.time.current - value.time.start - value.time.hook
-		end
 		value.alt.max = math.max(value.alt.current, value.alt.max)				-- update maximum altitude
+		if hasGps then
+			value.gSpdMax = math.max(value.gSpd, value.gSpdMax)			-- update maximum GPS speed
+		end
 		altitude = value.alt.current
   	end
-
-	if value.state == 2 then									-- if state is "launch climb"
-		value.alt.launch = value.alt.current					-- update launch altitude with current alt
-	end
-
-	if value.alt.launch < 100 then xLaunch = 112 end			-- shift altitude value right 
 
 	if value.rxBt < 5 then
 		rxBtBlink = MIDSIZE+BLINK
 	end
 
-	lcd.drawNumber(xLaunch, 26, math.modf(value.alt.launch), MIDSIZE)
-	lcd.drawNumber(112, 0, value.lnchnr, MIDSIZE+INVERS)
 	lcd.drawText(15, 0, decimalZero(altitude).."m", MIDSIZE)
-	lcd.drawText(112, 18, "LnA", SMLSIZE)
+
+	lcd.drawNumber(112, 0, value.lnchnr, MIDSIZE+INVERS)
+
+	lcd.drawText(15, 18, decimalZero(value.time.duration).."s", MIDSIZE)
+	lcd.drawText(112, 18, "Bat", SMLSIZE)
+	lcd.drawText(111, 28, decimalZero(calculateCels(value.cels)), SMLSIZE)
+
+	if hasGps then
+		local spdStyle = value.sats < 6 and MIDSIZE+BLINK or MIDSIZE
+		lcd.drawText(15, 36, decimalZero(value.gSpd).."km/h", spdStyle)
+		lcd.drawText(15, 49, "max:"..decimalZero(value.gSpdMax), SMLSIZE)
+	else
+		lcd.drawText(15, 36, decimalZero(value.vSpd).."m/s", MIDSIZE)
+	end
+
 	lcd.drawText(112, 44, "RxB", SMLSIZE)
-	lcd.drawText(110, 52, decimalZero(value.rxBt), rxBtBlink)	-- get voltage from the Tx
-  	lcd.drawText(15, 57, decimalZero(value.time.duration).."s", SMLSIZE)
-	lcd.drawText(15, 18, decimalZero(value.time.lap).."s", MIDSIZE)
+	lcd.drawText(110, 52, decimalZero(value.rxBt), rxBtBlink)
+
+	lcd.drawText(15, 57, model.getInfo().name, SMLSIZE+INVERS)
 
 	if value.state == 0 then
 		lcd.drawText(18, 38, "[ ENTER long ] setup", SMLSIZE+INVERS)
@@ -305,15 +337,12 @@ for _, name in ipairs({"sa","sb","sc","sd","se","sf","sg","sh"}) do
 end
 
 local setupMode = false
-local setupStep = 1					-- 1=switch, 2=position, 3=stop mode
+local setupStep = 1					-- 1=switch selection, 2=position selection
 local switchIndex = 1
-local positions = {"up", "down"}
-local positionIndex = 1					-- 1=up, 2=down
-local launchPosition = "up"				-- which switch position activates launch ("up"=swSR>0, "down"=swSR<0)
-local stopModes = {"alt", "sw"}
-local stopModeIndex = 1					-- 1=alt, 2=sw
-local stopMode = "alt"					-- "alt"=altimeter landing detection, "sw"=manual switch stop
-local CONFIG_PATH = "/SCRIPTS/TELEMETRY/DLGF3K.cfg"
+local positions = {"down", "up"}
+local positionIndex = 1					-- 1=down, 2=up
+local motorPosition = "down"			-- which switch position activates motor ("down"=swSR<0, "up"=swSR>0)
+local CONFIG_PATH = "/SCRIPTS/TELEMETRY/MOTOR.cfg"
 
 local function findSwitchIndex(name)
 	for i, sw in ipairs(switches) do
@@ -322,9 +351,9 @@ local function findSwitchIndex(name)
 	return nil
 end
 
-local function findOptionIndex(list, val)
-	for i, v in ipairs(list) do
-		if v == val then return i end
+local function findPositionIndex(pos)
+	for i, p in ipairs(positions) do
+		if p == pos then return i end
 	end
 	return 1
 end
@@ -335,7 +364,7 @@ local function loadConfig()
 		local data = io.read(file, 128)
 		io.close(file)
 		if data then
-			local name, pos, smode = string.match(data, "(%S+)%s+(%S+)%s*(%S*)")
+			local name, pos = string.match(data, "(%S+)%s+(%S+)")
 			if not name then
 				name = string.gsub(data, "%s+", "")
 			end
@@ -347,13 +376,9 @@ local function loadConfig()
 					field.launchSwitchId = safeGetFieldId(name)
 				end
 			end
-			if pos and (pos == "up" or pos == "down") then
-				launchPosition = pos
-				positionIndex = findOptionIndex(positions, pos)
-			end
-			if smode and (smode == "alt" or smode == "sw") then
-				stopMode = smode
-				stopModeIndex = findOptionIndex(stopModes, smode)
+			if pos and (pos == "down" or pos == "up") then
+				motorPosition = pos
+				positionIndex = findPositionIndex(pos)
 			end
 			return
 		end
@@ -371,30 +396,25 @@ end
 local function saveConfig()
 	local file = io.open(CONFIG_PATH, "w")
 	if file then
-		io.write(file, hardware.launchSwitch.."\n"..launchPosition.."\n"..stopMode)
+		io.write(file, hardware.launchSwitch.."\n"..motorPosition)
 		io.close(file)
 	end
 end
 
 local function drawSetup()
 	lcd.clear()
-	lcd.drawText(14, 0, "DLG SETUP", DBLSIZE)
+	lcd.drawText(14, 0, "MTR SETUP", DBLSIZE)
 
 	local swStyle = setupStep == 1 and INVERS or 0
 	local posStyle = setupStep == 2 and INVERS or 0
-	local stopStyle = setupStep == 3 and INVERS or 0
 
-	lcd.drawText(4, 18, "Switch:", SMLSIZE)
+	lcd.drawText(4, 20, "Switch:", SMLSIZE)
 	local name = string.upper(switches[switchIndex].name)
-	lcd.drawText(50, 17, name, MIDSIZE+swStyle)
+	lcd.drawText(50, 18, name, MIDSIZE+swStyle)
 
-	lcd.drawText(4, 32, "Launch:", SMLSIZE)
+	lcd.drawText(4, 36, "Motor on:", SMLSIZE)
 	local posLabel = string.upper(positions[positionIndex])
-	lcd.drawText(50, 31, posLabel, MIDSIZE+posStyle)
-
-	lcd.drawText(4, 46, "Stop:", SMLSIZE)
-	local stopLabel = string.upper(stopModes[stopModeIndex])
-	lcd.drawText(50, 45, stopLabel, MIDSIZE+stopStyle)
+	lcd.drawText(50, 34, posLabel, MIDSIZE+posStyle)
 
 	lcd.drawText(4, 57, "[+/-] change", SMLSIZE)
 	lcd.drawText(76, 57, "[ENT] next", SMLSIZE)
@@ -415,10 +435,10 @@ local function init()			-- intialize values
 	display.yMax = settings.yMaxInit				-- set Y-axis max value (m)
 	display.yScale = 10					-- set Y-axis marker interval (sec)
 	display.index = 1					-- set initial array position
-	value.alt.launch = 0					-- reset flight launch altitude
 	value.alt.max = 0					-- reset flight max altitude
 	value.time.duration = 0					-- reset flight duration
-	value.time.lap = 0					-- reset lap time
+	value.vSpd = 0
+	value.gSpdMax = 0					-- reset max GPS speed
   	resetBaro()					-- reset barometric sensor
 end
 
@@ -433,28 +453,23 @@ local function run(event)				-- this function will run until it is stopped
 				or event == EVT_PLUS_BREAK or event == EVT_PLUS_REPT then
 			if setupStep == 1 then
 				switchIndex = switchIndex < #switches and switchIndex + 1 or 1
-			elseif setupStep == 2 then
-				positionIndex = positionIndex < #positions and positionIndex + 1 or 1
 			else
-				stopModeIndex = stopModeIndex < #stopModes and stopModeIndex + 1 or 1
+				positionIndex = positionIndex < #positions and positionIndex + 1 or 1
 			end
 		elseif event == EVT_VIRTUAL_DEC or event == EVT_VIRTUAL_DEC_REPT
 				or event == EVT_MINUS_BREAK or event == EVT_MINUS_REPT then
 			if setupStep == 1 then
 				switchIndex = switchIndex > 1 and switchIndex - 1 or #switches
-			elseif setupStep == 2 then
-				positionIndex = positionIndex > 1 and positionIndex - 1 or #positions
 			else
-				stopModeIndex = stopModeIndex > 1 and stopModeIndex - 1 or #stopModes
+				positionIndex = positionIndex > 1 and positionIndex - 1 or #positions
 			end
 		elseif event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK then
-			if setupStep < 3 then
-				setupStep = setupStep + 1
+			if setupStep == 1 then
+				setupStep = 2
 			else
 				hardware.launchSwitch = switches[switchIndex].name
 				field.launchSwitchId = switches[switchIndex].id
-				launchPosition = positions[positionIndex]
-				stopMode = stopModes[stopModeIndex]
+				motorPosition = positions[positionIndex]
 				saveConfig()
 				beep(200)
 				setupStep = 1
@@ -462,8 +477,7 @@ local function run(event)				-- this function will run until it is stopped
 			end
 		elseif event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK then
 			switchIndex = findSwitchIndex(hardware.launchSwitch)
-			positionIndex = findOptionIndex(positions, launchPosition)
-			stopModeIndex = findOptionIndex(stopModes, stopMode)
+			positionIndex = findPositionIndex(motorPosition)
 			setupStep = 1
 			setupMode = false
 		end
@@ -480,47 +494,49 @@ local function run(event)				-- this function will run until it is stopped
 	end
 
 	lcd.clear()						-- clear the display
-	
-	value.swSR = getValue(field.launchSwitchId)				-- get value of launch switch (Tx launch mode)
+
+	value.swSR = getValue(field.launchSwitchId)				-- get value of launch switch
 	value.alt.current = getValue(field.altId)				-- get current altitude from vario (m)
-	local vspd = getValue(field.vspdId)						-- get current vertical speed (m/s)					
+	value.vSpd = getValue(field.vspdId)						-- get current vertical speed (m/s)
 	value.rxBt = getValue(field.rxBtId)						-- get current RxBt voltage
+	value.cels = getValue(field.celsId)						-- get current Cels voltage
+	value.gSpd = getValue(field.gspdId)						-- get current GPS speed (km/h)
+	value.sats = getValue(field.satsId)						-- get number of GPS satellites
 
 --  ----------------------------------
 --	  change program state
 --  ----------------------------------
 
-	local launchOn = (launchPosition == "up" and value.swSR > 0) or (launchPosition == "down" and value.swSR < 0)
-	local launchOff = (launchPosition == "up" and value.swSR < 0) or (launchPosition == "down" and value.swSR > 0)
+	local motorOn = (motorPosition == "down" and value.swSR < 0) or (motorPosition == "up" and value.swSR > 0)
+	local resetOn = (motorPosition == "down" and value.swSR > 0) or (motorPosition == "up" and value.swSR < 0)
 
-	if value.state == 0 and launchOn then					-- if launch switch was moved to launch mode from "init/stop" state
+	if value.state == 0 and motorOn then					-- motor switch activated from "stop" state
 		init()								-- reset graph data & scale
 		beep(250)
-		value.state = 1						-- change state to "ready"
-		elseif value.state == 1 and launchOff then				-- if launch mode is ended without a flight
-			value.state = 0						-- change state to "stop"
-		elseif value.state == 1 and value.alt.current > settings.tresholdAlt then			-- if launch detected in "ready" state
-			value.time.start = getTime()/100				-- set flight start time (seconds)
-			value.time.takeOff = getDateTime()
-			display.alts[1] = value.alt.current					-- set first altitude point
-			display.index = 2						-- set index for 2nd alt point
-			value.state = 2						-- change state to "launch climb"
-			value.lnchnr = value.lnchnr + 1					-- increment the launch number
-			model.setTimer(0,{mode=1})			-- unlock lap timer
-		elseif value.state == 2 and value.alt.current < value.alt.max and value.alt.current > 2*settings.tresholdAlt then			-- if in "launch climb" and altitude decreases
-			value.time.hook = value.time.current - value.time.start				-- set release hook time
-			value.alt.launch = value.alt.max					-- set launch altitude
-			value.state = 3						-- set state = "gliding"
-			beep(1000)
-		elseif value.state > 1 and ((stopMode == "alt" and value.alt.current < settings.tresholdAlt-1 and launchOff) or (stopMode == "sw" and launchOff)) then	-- landing detection
+		value.time.start = getTime()/100				-- set flight start time (seconds)
+		value.time.takeOff = getDateTime()
+		display.alts[1] = value.alt.current					-- set first altitude point
+		display.index = 2						-- set index for 2nd alt point
+		value.state = 3						-- change state to "in flight"
+		value.lnchnr = value.lnchnr + 1					-- increment the launch number
+		elseif value.state == 3 and not motorOn then		-- motor switch deactivated, flight ended
 			value.state = 0						-- change state to "stop"
 			beep(500)
 			if settings.saveLog then
 				value.time.landing = getDateTime()
 				writeLog() -- landing, write to SD
 			end
-			logBook[value.lnchnr] = value.time.lap
+			logBook[value.lnchnr] = value.time.duration
 			quickSort(logBook, 1, #logBook)
+		elseif value.state == 0 and resetOn and not value.resetDone then	-- opposite switch position resets telemetry (once)
+			init()
+			value.lnchnr = 0
+			value.resetDone = true
+			beep(100)
+	end
+
+	if not resetOn then
+		value.resetDone = false
 	end
 
 	rescaleY()
