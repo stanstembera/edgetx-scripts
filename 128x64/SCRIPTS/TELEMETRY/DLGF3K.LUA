@@ -47,10 +47,17 @@ local function safeGetFieldId(name)
 	return info and info.id or 0
 end
 
+local function sensorExists(name)
+	return getFieldInfo(name) ~= nil
+end
+
+local hasGps = sensorExists("GSpd")
+
 local field = {
 	altId = safeGetFieldId("Alt"),
 	vspdId = safeGetFieldId("VSpd"),
 	rxBtId = safeGetFieldId("RxBt"),
+	gspdId = safeGetFieldId("GSpd"),
 	launchSwitchId = safeGetFieldId(hardware.launchSwitch)
 }
 
@@ -86,7 +93,9 @@ local value = {
 	lnchnr = 0,					-- launch counter
 	swSR,						-- start / reset switch value from Tx (<0 is UP for launch mode)
 	rxBt,						-- Rx battery voltage value
-	state = 0					-- program state : 0=init/stop, 1=ready, 2=launch climb, 3=gliding
+	state = 0,					-- program state : 0=init/stop, 1=ready, 2=launch climb, 3=gliding
+	gSpd = 0,					-- current GPS speed (km/h)
+	gSpdMax = 0					-- maximum GPS speed during flight (km/h)
 }
 
 logBook = {}				-- share flight results with logbook script (global for RESULT.LUA)
@@ -158,14 +167,15 @@ local writeLog = function()
 	
 	file = io.open(fileName, "a") 
   
-	if newFile then io.write(file, "Date,TakeOff,Land,FlightNo,LaunchAltitude,MaxAltitude,Duration,Lap,AltGraph\r\n") end
-	
+	if newFile then io.write(file, "Date,TakeOff,Land,FlightNo,LaunchAltitude,MaxAltitude,MaxSpeed,Duration,Lap,AltGraph\r\n") end
+
 	local date = takeOff.year.."-"..leadZero(takeOff.mon).."-"..leadZero(takeOff.day)
 	local takeOff = leadZero(takeOff.hour)..":"..leadZero(takeOff.min)..":"..leadZero(takeOff.sec)
 	local land = leadZero(landing.hour)..":"..leadZero(landing.min)..":"..leadZero(landing.sec)
 	local flightNumber = value.lnchnr
 	local launchAltitude = decimalZero(value.alt.launch)
 	local maxAltitude = decimalZero(value.alt.max)
+	local maxSpeed = decimalZero(value.gSpdMax)
 	local duration = decimalZero(value.time.duration)
 	local lap = decimalZero(value.time.lap)
 	local altGraph = ""
@@ -173,8 +183,8 @@ local writeLog = function()
 		if i > 1 then altGraph = altGraph .. "_" end
 		altGraph = altGraph .. round(display.alts[i], 2)
 	end
-	
-	io.write(file, date..","..takeOff..","..land..","..flightNumber..","..launchAltitude..","..maxAltitude..","..duration..","..lap..","..altGraph.."\r\n")
+
+	io.write(file, date..","..takeOff..","..land..","..flightNumber..","..launchAltitude..","..maxAltitude..","..maxSpeed..","..duration..","..lap..","..altGraph.."\r\n")
   	io.close(file)
 end
 
@@ -195,6 +205,9 @@ local displayValues = function()
 			value.time.lap = value.time.current - value.time.start - value.time.hook
 		end
 		value.alt.max = math.max(value.alt.current, value.alt.max)				-- update maximum altitude
+		if hasGps then
+			value.gSpdMax = math.max(value.gSpd, value.gSpdMax)				-- update maximum GPS speed
+		end
 		altitude = value.alt.current
   	end
 
@@ -419,6 +432,7 @@ local function init()			-- intialize values
 	value.alt.max = 0					-- reset flight max altitude
 	value.time.duration = 0					-- reset flight duration
 	value.time.lap = 0					-- reset lap time
+	value.gSpdMax = 0					-- reset max GPS speed
   	resetBaro()					-- reset barometric sensor
 end
 
@@ -483,8 +497,11 @@ local function run(event)				-- this function will run until it is stopped
 	
 	value.swSR = getValue(field.launchSwitchId)				-- get value of launch switch (Tx launch mode)
 	value.alt.current = getValue(field.altId)				-- get current altitude from vario (m)
-	local vspd = getValue(field.vspdId)						-- get current vertical speed (m/s)					
+	local vspd = getValue(field.vspdId)						-- get current vertical speed (m/s)
 	value.rxBt = getValue(field.rxBtId)						-- get current RxBt voltage
+	if hasGps then
+		value.gSpd = getValue(field.gspdId)					-- get current GPS speed (km/h)
+	end
 
 --  ----------------------------------
 --	  change program state

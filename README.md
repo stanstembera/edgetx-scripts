@@ -11,7 +11,7 @@ Real-time altitude graph with flight state tracking for DLG sailplanes.
 **Features:**
 - Live altitude vs. time graph with auto-scaling axes
 - Automatic flight state detection (ready → launch climb → gliding → stopped)
-- Tracks launch altitude, max altitude, flight duration and lap (glide) time
+- Tracks launch altitude, max altitude, max GPS speed, flight duration and lap (glide) time
 - Flight logbook with CSV export to SD card
 - Audio feedback on state changes
 - Configurable launch switch (SA–SH) with persistent config
@@ -41,6 +41,8 @@ Real-time altitude graph with flight state tracking for DLG sailplanes.
 | `audioState`   | true    | Enable audio feedback                |
 
 **Required sensors:** Alt, VSpd, RxBt
+
+**Optional sensors:** GSpd (ELRS GPS for max speed tracking)
 
 **Log files:** `/LOGS/<ModelName>-LogBook-YYYY-MM-DD.csv`
 
@@ -95,6 +97,29 @@ With a 3-position switch, the opposite position resets telemetry (flight counter
 **Optional sensors:** GSpd, Sats (ELRS GPS)
 
 **Log files:** `/LOGS/<ModelName>-LogBook-YYYY-MM-DD.csv`
+
+---
+
+### CSV Log Format
+
+Both scripts write the same CSV format for unified import:
+
+```
+Date,TakeOff,Land,FlightNo,LaunchAltitude,MaxAltitude,MaxSpeed,Duration,Lap,AltGraph
+```
+
+| Column          | Description                                      |
+|-----------------|--------------------------------------------------|
+| Date            | Flight date (YYYY-MM-DD)                         |
+| TakeOff         | Take-off time (HH:MM:SS)                         |
+| Land            | Landing time (HH:MM:SS)                          |
+| FlightNo        | Flight number within session                     |
+| LaunchAltitude  | Altitude at launch/motor cutoff (m)              |
+| MaxAltitude     | Maximum altitude reached (m)                     |
+| MaxSpeed        | Maximum GPS speed (km/h), 0 if no GPS            |
+| Duration        | Flight duration (s)                              |
+| Lap             | Glide time after release (s), 0 for motor models |
+| AltGraph        | Altitude samples separated by `_`                |
 
 ---
 

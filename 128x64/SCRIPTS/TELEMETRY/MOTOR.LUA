@@ -186,22 +186,24 @@ local writeLog = function()
 
 	file = io.open(fileName, "a")
 
-	if newFile then io.write(file, "Date,TakeOff,Land,FlightNo,MaxAltitude,MaxSpeed,Duration,AltGraph\r\n") end
+	if newFile then io.write(file, "Date,TakeOff,Land,FlightNo,LaunchAltitude,MaxAltitude,MaxSpeed,Duration,Lap,AltGraph\r\n") end
 
 	local date = takeOff.year.."-"..leadZero(takeOff.mon).."-"..leadZero(takeOff.day)
 	local takeOff = leadZero(takeOff.hour)..":"..leadZero(takeOff.min)..":"..leadZero(takeOff.sec)
 	local land = leadZero(landing.hour)..":"..leadZero(landing.min)..":"..leadZero(landing.sec)
 	local flightNumber = value.lnchnr
+	local launchAltitude = decimalZero(value.alt.max)
 	local maxAltitude = decimalZero(value.alt.max)
 	local maxSpeed = decimalZero(value.gSpdMax)
 	local duration = decimalZero(value.time.duration)
+	local lap = decimalZero(0)
 	local altGraph = ""
 	for i = 1, #display.alts do
 		if i > 1 then altGraph = altGraph .. "_" end
 		altGraph = altGraph .. round(display.alts[i], 2)
 	end
 
-	io.write(file, date..","..takeOff..","..land..","..flightNumber..","..maxAltitude..","..maxSpeed..","..duration..","..altGraph.."\r\n")
+	io.write(file, date..","..takeOff..","..land..","..flightNumber..","..launchAltitude..","..maxAltitude..","..maxSpeed..","..duration..","..lap..","..altGraph.."\r\n")
   	io.close(file)
 end
 
